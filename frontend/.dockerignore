@@ -1,0 +1,6 @@
+.next
+coverage
+node_modules
+.pnpm-store
+tsconfig.tsbuildinfo
+*.log

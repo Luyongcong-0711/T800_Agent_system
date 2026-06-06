@@ -1,0 +1,45 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!deploy/env/*.example
+
+# Runtime state and local data
+/.agent_state/
+/logs/
+/local_workspace/*
+!/local_workspace/.gitkeep
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node / Next.js
+node_modules/
+.pnpm-store/
+.next/
+*.tsbuildinfo
+coverage/
+dist/
+out/
+
+# Test and report artifacts
+test-results/
+playwright-report/
+
+# Logs
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

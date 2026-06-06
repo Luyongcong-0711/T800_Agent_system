@@ -1,0 +1,2 @@
+"""Encrypted workspace secret store."""
+
