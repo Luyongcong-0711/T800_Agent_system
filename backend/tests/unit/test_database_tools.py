@@ -72,7 +72,13 @@ def test_database_health_tools_return_sanitized_diagnosis_and_persist_snapshot(
     )
     assert neo4j_report["status"] == "unhealthy"
     assert neo4j_report["recommended_actions"]
+    assert "确认 Neo4j HTTP 或 Bolt 入口可达。" in neo4j_report["recommended_actions"]
+    assert "为 Neo4j 补充可解析的连接凭据配置。" in neo4j_report[
+        "recommended_actions"
+    ]
     assert "secret_ref" not in json.dumps(check_result, ensure_ascii=False).lower()
+    assert "纭" not in json.dumps(check_result, ensure_ascii=False)
+    assert "�" not in json.dumps(check_result, ensure_ascii=False)
 
     assert diagnose_result["ok"] is False
     assert diagnose_result["data"]["summary"]["unhealthy_targets"] == ["neo4j"]

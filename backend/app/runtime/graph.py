@@ -366,6 +366,7 @@ def build_runtime_graph(
                         "id": call["tool_call_id"],
                         "name": call["name"],
                         "args": call["args"],
+                        "type": "tool_call",
                     }
                     for call in pending_tool_calls
                 ],

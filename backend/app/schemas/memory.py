@@ -119,6 +119,8 @@ class MemorySyncStateResponse(BaseModel):
     schema_version: int = 1
     workspace_id: str
     pending_targets: list[dict[str, Any]] = Field(default_factory=list)
+    external_sync_enabled: bool | None = None
+    sync_mode: str | None = None
     last_event_id: str | None = None
     last_event_seq: int = 0
     last_enqueue: dict[str, Any] | None = None

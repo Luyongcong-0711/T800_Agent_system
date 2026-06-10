@@ -70,10 +70,17 @@ SENSITIVE_MEMORY_TERMS = (
 
 
 class MemoryService:
-    def __init__(self, object_store: ObjectStore, job_service: Any | None = None) -> None:
+    def __init__(
+        self,
+        object_store: ObjectStore,
+        job_service: Any | None = None,
+        *,
+        external_sync_enabled: bool = True,
+    ) -> None:
         self.object_store = object_store
         self.json_store = JsonObjectStore(object_store)
         self.job_service = job_service
+        self.external_sync_enabled = external_sync_enabled
 
     def upsert_memory(
         self,
@@ -516,10 +523,13 @@ class MemoryService:
         return self.json_store.read_json(key)
 
     def get_sync_state(self, workspace_id: str) -> dict[str, Any]:
-        return self.json_store.read_json_or_default(
+        state = self.json_store.read_json_or_default(
             memory_sync_state_key(workspace_id),
             self._empty_memory_sync_state(workspace_id),
         )
+        state["external_sync_enabled"] = self.external_sync_enabled
+        state["sync_mode"] = "external_indexes" if self.external_sync_enabled else "local_only"
+        return state
 
     def _normalize_scope(self, memory_type: str, requested_scope: str | None) -> str:
         if memory_type in GLOBAL_MEMORY_TYPES:
@@ -738,6 +748,14 @@ class MemoryService:
         pending_targets = list(state.get("pending_targets") or [])
         if not pending_targets:
             return None
+        if not self.external_sync_enabled:
+            return {
+                "status": "disabled",
+                "event_id": event["event_id"],
+                "pending_target_count": len(pending_targets),
+                "reason": "memory_external_sync_disabled",
+                "updated_at": utc_now_iso(),
+            }
 
         request = CreateJobRequest(
             job_type="memory_sync_job",

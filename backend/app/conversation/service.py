@@ -437,14 +437,49 @@ class ConversationService:
                 "ok": result.ok,
                 "error_type": result.error_type,
             }
+            event_payload = tool_payload
+            approval_payload: dict[str, Any] | None = None
+            if result.error_type == "approval_required":
+                content = result.content if isinstance(result.content, dict) else {}
+                data = content.get("data") if isinstance(content.get("data"), dict) else {}
+                approval_payload = {
+                    **tool_payload,
+                    "approval_id": data.get("approval_id"),
+                    "approval_kind": data.get("approval_kind") or "tool_invocation",
+                    "tool_name": data.get("tool_name") or result.name,
+                    "risk_level": data.get("risk_level"),
+                    "status": data.get("status") or "waiting_approval",
+                    "operation_plan_object_key": data.get("operation_plan_object_key"),
+                    "approval_reason": data.get("approval_reason"),
+                    "target_path": data.get("target_path"),
+                    "local_file_root": data.get("local_file_root"),
+                }
+                event_payload = {
+                    key: value for key, value in approval_payload.items() if value is not None
+                }
             self._append_event(workspace_id, thread_id, run_id, "tool_call_started", tool_payload)
             self._append_event(
                 workspace_id,
                 thread_id,
                 run_id,
                 "tool_call_completed" if result.ok else "tool_call_failed",
-                tool_payload,
+                event_payload,
             )
+            if approval_payload is not None:
+                self._append_event(
+                    workspace_id,
+                    thread_id,
+                    run_id,
+                    "tool_call_approval_required",
+                    event_payload,
+                )
+                self._append_event(
+                    workspace_id,
+                    thread_id,
+                    run_id,
+                    "approval_requested",
+                    event_payload,
+                )
             self._append_subagent_tool_events(workspace_id, thread_id, run_id, result)
 
         if not self._run_lease_is_active(workspace_id, run_id, fencing_token):
@@ -1089,6 +1124,7 @@ class ConversationService:
                 {
                     "id": tool_result["tool_call_id"],
                     "name": tool_result["name"],
+                    "type": "tool_call",
                     "args": redact_runtime_value(
                         plan.get("args") if isinstance(plan.get("args"), dict) else {}
                     ),
@@ -1211,6 +1247,7 @@ class ConversationService:
                 {
                     "id": tool_call_id,
                     "name": "skill_entrypoint_call",
+                    "type": "tool_call",
                     "args": redact_runtime_value(
                         {
                             "entrypoint_tool_name": plan.get("entrypoint_tool_name"),

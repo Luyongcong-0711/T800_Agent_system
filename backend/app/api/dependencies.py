@@ -32,8 +32,11 @@ ROLE_RANK = {
 def get_object_store() -> ObjectStore:
     settings = get_settings()
     if settings.object_store_backend == "local":
-        if not settings.is_development_like:
-            raise RuntimeError("Local object store is only allowed in development/test.")
+        if not settings.is_development_like and not settings.local_object_store_allow_production:
+            raise RuntimeError(
+                "Local object store in production requires "
+                "LOCAL_OBJECT_STORE_ALLOW_PRODUCTION=true."
+            )
         return LocalObjectStore(settings.local_object_store_dir)
     if settings.object_store_backend == "minio":
         if not settings.minio_access_key or not settings.minio_secret_key:
@@ -412,6 +415,8 @@ def build_milvus_vector_store_for_workspace(
     from app.vector_store.milvus_http import MilvusHttpVectorStore
 
     current_settings = settings or get_settings()
+    if not current_settings.external_database_targets_enabled:
+        raise ValueError("External database targets are disabled.")
     target = _database_target(
         DatabaseConfigService(object_store, current_settings).get_config(workspace_id),
         "milvus",
@@ -447,6 +452,8 @@ def build_neo4j_graph_writer_for_workspace(
     from app.graph_pipeline.neo4j_writer import Neo4jGraphWriter
 
     current_settings = settings or get_settings()
+    if not current_settings.external_database_targets_enabled:
+        return None
     target = _database_target(
         DatabaseConfigService(object_store, current_settings).get_config(workspace_id),
         "neo4j",
@@ -519,6 +526,8 @@ def build_neo4j_readonly_query_for_workspace(
     from app.graph_pipeline.neo4j_readonly import Neo4jReadOnlyQueryAdapter
 
     current_settings = settings or get_settings()
+    if not current_settings.external_database_targets_enabled:
+        return None
     target = _database_target(
         DatabaseConfigService(object_store, current_settings).get_config(workspace_id),
         "neo4j",
@@ -695,7 +704,12 @@ def get_memory_service(
 ):
     from app.memory.service import MemoryService
 
-    return MemoryService(object_store, job_service=job_service)
+    settings = get_settings()
+    return MemoryService(
+        object_store,
+        job_service=job_service,
+        external_sync_enabled=settings.memory_external_sync_enabled,
+    )
 
 
 def get_skill_service(
@@ -729,7 +743,7 @@ def get_observability_service(
 
 def get_identity() -> RuntimeIdentity:
     settings = get_settings()
-    if not settings.is_development_like:
+    if settings.login_enabled and not settings.is_development_like:
         raise HTTPException(status_code=401, detail="authentication_required")
     return get_default_identity(settings)
 

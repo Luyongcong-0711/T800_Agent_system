@@ -48,6 +48,10 @@ class Settings:
     default_workspace_role: str = field(
         default_factory=lambda: _env("DEFAULT_WORKSPACE_ROLE", "owner")
     )
+    login_enabled: bool = field(default_factory=lambda: _env_bool("LOGIN_ENABLED", False))
+    workspace_switch_enabled: bool = field(
+        default_factory=lambda: _env_bool("WORKSPACE_SWITCH_ENABLED", False)
+    )
 
     minio_endpoint: str = field(default_factory=lambda: _env("MINIO_ENDPOINT", "http://localhost:9000"))
     minio_bucket: str = field(default_factory=lambda: _env("MINIO_BUCKET", "agent-system"))
@@ -62,11 +66,23 @@ class Settings:
     neo4j_auth: str | None = field(default_factory=lambda: os.getenv("NEO4J_AUTH"))
     redis_url: str = field(default_factory=lambda: _env("REDIS_URL", "redis://localhost:6379/0"))
     object_store_backend: str = field(default_factory=lambda: _env("OBJECT_STORE_BACKEND", "local"))
+    local_object_store_allow_production: bool = field(
+        default_factory=lambda: _env_bool("LOCAL_OBJECT_STORE_ALLOW_PRODUCTION", False)
+    )
     local_object_store_dir: str = field(
         default_factory=lambda: _env(
             "LOCAL_OBJECT_STORE_DIR",
             str(Path(__file__).resolve().parents[3] / ".agent_state"),
         )
+    )
+    external_database_targets_enabled: bool = field(
+        default_factory=lambda: _env_bool("EXTERNAL_DATABASE_TARGETS_ENABLED", True)
+    )
+    memory_external_sync_enabled: bool = field(
+        default_factory=lambda: _env_bool("MEMORY_EXTERNAL_SYNC_ENABLED", True)
+    )
+    static_secret_seed_enabled: bool = field(
+        default_factory=lambda: _env_bool("STATIC_SECRET_SEED_ENABLED", False)
     )
     p0_acceptance_report_path: str = field(
         default_factory=lambda: _env(
@@ -125,6 +141,9 @@ class Settings:
             "LOCAL_FILE_TOOLS_ROOT",
             str(Path(__file__).resolve().parents[3] / "local_workspace"),
         )
+    )
+    local_file_host_root: str | None = field(
+        default_factory=lambda: os.getenv("LOCAL_FILE_HOST_ROOT")
     )
 
     @property

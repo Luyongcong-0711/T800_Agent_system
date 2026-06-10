@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-ServiceStatus = Literal["healthy", "unhealthy", "unknown"]
+ServiceStatus = Literal["healthy", "unhealthy", "unknown", "disabled"]
 
 
 class ServiceHealth(BaseModel):

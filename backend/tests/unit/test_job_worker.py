@@ -225,6 +225,74 @@ def test_memory_service_auto_queues_memory_sync_job_when_injected(tmp_path) -> N
     assert state["last_enqueue"]["existing_job_id"] == jobs[0]["job_id"]
 
 
+def test_memory_external_sync_disabled_keeps_outbox_without_auto_queue(tmp_path) -> None:
+    object_store = LocalObjectStore(tmp_path / "objects")
+    job_service = JobService(object_store, runtime_instance_id="rt_worker")
+    service = MemoryService(
+        object_store,
+        job_service=job_service,
+        external_sync_enabled=False,
+    )
+
+    service.upsert_memory(
+        "default",
+        _identity(),
+        UpsertMemoryRequest(
+            type="user_preference",
+            field="answer_style",
+            summary="User prefers concise Chinese answers.",
+            content="The user wants concise Chinese answers.",
+            source=MemorySource(thread_id="thread_001", message_id="msg_001"),
+        ),
+    )
+    state = JsonObjectStore(object_store).read_json(memory_sync_state_key("default"))
+
+    assert job_service.list_jobs("default", job_type="memory_sync_job") == []
+    assert state["pending_targets"][0]["target"] == "milvus"
+    assert state["last_enqueue"]["status"] == "disabled"
+    assert state["last_enqueue"]["reason"] == "memory_external_sync_disabled"
+
+
+def test_memory_sync_job_is_noop_when_external_sync_disabled(tmp_path) -> None:
+    object_store = LocalObjectStore(tmp_path / "objects")
+    job_service = JobService(object_store, runtime_instance_id="rt_worker")
+    MemoryService(object_store).upsert_memory(
+        "default",
+        _identity(),
+        UpsertMemoryRequest(
+            type="user_preference",
+            field="answer_style",
+            summary="User prefers concise Chinese answers.",
+            content="The user wants concise Chinese answers.",
+            source=MemorySource(thread_id="thread_001", message_id="msg_001"),
+        ),
+    )
+    job_service.create_job(
+        "default",
+        _identity(),
+        _request(job_type="memory_sync_job", idempotency_key="memory-sync-disabled"),
+    )
+
+    result = JobWorker(
+        job_service,
+        {
+            "memory_sync_job": build_memory_sync_handler(
+                object_store,
+                settings=Settings(memory_external_sync_enabled=False),
+                embedding_client_factory=lambda _: _FakeEmbeddingClient(),
+                vector_store_factory=lambda _: _FakeVectorStore(),
+            )
+        },
+    ).process_next("default")
+    state = JsonObjectStore(object_store).read_json(memory_sync_state_key("default"))
+
+    assert result["claimed"] is True
+    assert result["job"]["status"] == "succeeded"
+    assert result["job"]["current_stage"] == "memory_sync_disabled"
+    assert result["job"]["leaf_state"]["artifacts"][0]["pending_count"] == 1
+    assert state["pending_targets"][0]["target"] == "milvus"
+
+
 def test_job_worker_marks_missing_handler_failed(job_service: JobService) -> None:
     created = job_service.create_job(
         "default",

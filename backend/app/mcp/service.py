@@ -647,6 +647,7 @@ class McpService:
             if (
                 snapshot.get("stale")
                 or snapshot.get("status") not in {"connected", "configured"}
+                or snapshot.get("capability_source") == "fallback_unconfigured"
             ):
                 continue
             for tool in snapshot.get("tools", []):

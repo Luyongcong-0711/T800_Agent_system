@@ -60,6 +60,25 @@ def test_conversation_service_uses_default_model_config_and_secret_resolver(
     assert runner.llm_connector.secret_resolver is not None
 
 
+def test_local_object_store_can_be_explicitly_enabled_in_production(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    dependencies.get_object_store.cache_clear()
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("OBJECT_STORE_BACKEND", "local")
+    monkeypatch.setenv("LOCAL_OBJECT_STORE_ALLOW_PRODUCTION", "true")
+    monkeypatch.setenv("LOCAL_OBJECT_STORE_DIR", str(tmp_path / "objects"))
+
+    try:
+        store = dependencies.get_object_store()
+    finally:
+        dependencies.get_object_store.cache_clear()
+
+    store.write_text("probe.txt", "ok")
+    assert store.read_text("probe.txt") == "ok"
+
+
 def test_conversation_service_default_rag_tool_uses_active_embedding_collection(
     monkeypatch,
     tmp_path,

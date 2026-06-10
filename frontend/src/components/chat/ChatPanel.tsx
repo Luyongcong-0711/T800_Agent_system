@@ -63,6 +63,7 @@ const RUN_EVENT_TYPES = [
   'tool_call_started',
   'tool_call_completed',
   'tool_call_failed',
+  'tool_call_approval_required',
   'approval_requested',
   'approval_approved',
   'approval_rejected',
@@ -112,6 +113,9 @@ const useStyles = createStyles(({ css, token }) => ({
     border-top: 1px solid ${token.colorBorderSecondary};
     flex: 0 0 auto;
     padding-top: 12px;
+  `,
+  approvalPrompt: css`
+    margin-bottom: 10px;
   `,
   eventBody: css`
     display: flex;
@@ -315,6 +319,9 @@ function approvalKind(event: RunEvent, decision?: RunApprovalDecisionResponse) {
   if (explicitKind) {
     return explicitKind
   }
+  if (event.type === 'tool_call_approval_required') {
+    return 'tool_invocation'
+  }
   if (
     event.type === 'skill_entrypoint_approval_required' ||
     approvalArtifactValue(event, 'diff_object_key', decision)
@@ -327,6 +334,7 @@ function approvalKind(event: RunEvent, decision?: RunApprovalDecisionResponse) {
 function isApprovalRequestEvent(event: RunEvent) {
   return (
     (event.type === 'skill_entrypoint_approval_required' ||
+      event.type === 'tool_call_approval_required' ||
       event.type === 'approval_requested') &&
     Boolean(approvalIdFromEvent(event))
   )
@@ -384,6 +392,19 @@ function isClosedRunStatus(status: unknown): status is RunStatus {
   )
 }
 
+function runFailureMessage(run: RunDetailResponse, events: RunEvent[]) {
+  const failureEvent = [...events]
+    .reverse()
+    .find((event) => event.type === 'run_failed' || event.type === 'model_call_failed')
+  const errorType =
+    stringValue(run.model_error) ||
+    stringValue(failureEvent?.payload?.error_type) ||
+    stringValue(failureEvent?.payload?.error)
+  return errorType
+    ? `Run failed: ${errorType}`
+    : 'Run failed. Check Run events for details.'
+}
+
 function effectiveThreadRunStatus(
   thread: ThreadSummary,
   overrides: Record<string, RunStatus>,
@@ -405,6 +426,10 @@ function isStreamingAssistantMessage(message: ConversationMessage) {
   return message.role === 'assistant' && message.message_id.startsWith('stream-')
 }
 
+function isOptimisticUserMessage(message: ConversationMessage) {
+  return message.role === 'user' && message.message_id.startsWith('optimistic-')
+}
+
 function hasPersistedAssistantForRun(
   messages: ConversationMessage[],
   runId: string | null | undefined,
@@ -418,18 +443,82 @@ function hasPersistedAssistantForRun(
   )
 }
 
+function roleOrder(role: ConversationMessage['role']) {
+  if (role === 'system') {
+    return 0
+  }
+  if (role === 'user') {
+    return 1
+  }
+  if (role === 'assistant') {
+    return 2
+  }
+  return 3
+}
+
+function messageTime(message: ConversationMessage) {
+  const time = new Date(message.created_at).getTime()
+  return Number.isFinite(time) ? time : 0
+}
+
+function sortMessagesChronologically(messages: ConversationMessage[]) {
+  return messages
+    .map((message, index) => ({ index, message }))
+    .sort((left, right) => {
+      const timeDiff = messageTime(left.message) - messageTime(right.message)
+      if (timeDiff !== 0) {
+        return timeDiff
+      }
+      const roleDiff = roleOrder(left.message.role) - roleOrder(right.message.role)
+      if (roleDiff !== 0) {
+        return roleDiff
+      }
+      return left.index - right.index
+    })
+    .map((item) => item.message)
+}
+
+function mergeAndSortMessages(messages: ConversationMessage[]) {
+  const byId = new Map<string, ConversationMessage>()
+  messages.forEach((message) => {
+    byId.set(message.message_id, message)
+  })
+  return sortMessagesChronologically([...byId.values()])
+}
+
 function mergeMessagesWithStreamingDrafts(
   persistedMessages: ConversationMessage[],
   currentMessages: ConversationMessage[],
   threadId: string,
 ) {
-  const draftsToKeep = currentMessages.filter(
+  const localMessagesToKeep = currentMessages.filter(
     (message) =>
       message.thread_id === threadId &&
-      isStreamingAssistantMessage(message) &&
-      !hasPersistedAssistantForRun(persistedMessages, message.run_id),
+      ((isStreamingAssistantMessage(message) &&
+        !hasPersistedAssistantForRun(persistedMessages, message.run_id)) ||
+        isOptimisticUserMessage(message)),
   )
-  return [...persistedMessages, ...draftsToKeep]
+  return mergeAndSortMessages([...localMessagesToKeep, ...persistedMessages])
+}
+
+function pendingApprovalRequestEvents(events: RunEvent[]) {
+  const byApprovalId = new Map<string, RunEvent>()
+  events.forEach((event) => {
+    const approvalId = approvalIdFromEvent(event)
+    if (!approvalId || !isApprovalRequestEvent(event) || isApprovalResolved(events, approvalId)) {
+      return
+    }
+    byApprovalId.set(approvalId, event)
+  })
+  return [...byApprovalId.values()]
+}
+
+function visibleChatMessages(messages: ConversationMessage[]) {
+  return messages.filter(
+    (message) =>
+      (message.role === 'user' || message.role === 'assistant') &&
+      message.content.trim().length > 0,
+  )
 }
 
 function sortActiveThreads(threads: ThreadSummary[]) {
@@ -481,18 +570,22 @@ function RunApprovalCard({
     stringValue(event.payload?.entrypoint_tool_name) ||
     stringValue(event.payload?.entrypoint) ||
     null
+  const toolName = stringValue(event.payload?.tool_name)
+  const riskLevel = stringValue(event.payload?.risk_level)
   const operationId = operationIdFromApproval(event, decision)
+  const title =
+    kind === 'tool_invocation'
+      ? 'Tool approval'
+      : kind === 'skill_script_staged_patch'
+        ? 'Skill staged patch approval'
+        : 'Approval required'
 
   return (
     <Card
       size="small"
       title={
         <Space wrap>
-          <span>
-            {kind === 'skill_script_staged_patch'
-              ? 'Skill staged patch approval'
-              : 'Approval required'}
-          </span>
+          <span>{title}</span>
           <Tag color={resolved ? 'green' : 'orange'}>{status}</Tag>
         </Space>
       }
@@ -505,6 +598,8 @@ function RunApprovalCard({
           <Tag color="blue">{kind}</Tag>
           {skillRunId && <Tag>{skillRunId}</Tag>}
           {entrypoint && <Tag>{entrypoint}</Tag>}
+          {toolName && <Tag>{toolName}</Tag>}
+          {riskLevel && <Tag color={riskLevel === 'critical' ? 'red' : 'orange'}>{riskLevel}</Tag>}
         </Space>
         <ApprovalArtifacts event={event} decision={decision} />
         <ApprovalOperationSummary
@@ -825,6 +920,9 @@ function approvalArtifactRows(
     ['Operation status', 'operation_status'],
     ['Workspace commit', 'workspace_commit_status'],
     ['Rollback', 'rollback_token'],
+    ['Target', 'target_path'],
+    ['Workspace root', 'local_file_root'],
+    ['Reason', 'approval_reason'],
     ['Plan', 'operation_plan_object_key'],
     ['Diff', 'diff_object_key'],
     ['Manifest', 'manifest_object_key'],
@@ -916,6 +1014,8 @@ export function ChatPanel({
     : threadBlockingRunStatus
   const canRecoverActiveRun =
     Boolean(activeBlockingRunId) && activeBlockingRunStatus === 'running'
+  const pendingApprovalEvents = pendingApprovalRequestEvents(runEvents)
+  const displayedMessages = visibleChatMessages(messages)
 
   const closeEventSource = useCallback(() => {
     eventSourceRef.current?.close()
@@ -1036,7 +1136,7 @@ export function ChatPanel({
             : message,
         )
       }
-      return [
+      return mergeAndSortMessages([
         ...current,
         {
           content: delta,
@@ -1047,7 +1147,7 @@ export function ChatPanel({
           thread_id: event.thread_id,
           workspace_id: event.workspace_id,
         },
-      ]
+      ])
     })
   }, [])
 
@@ -1424,6 +1524,7 @@ export function ChatPanel({
     if (!content || activeBlockingRunId) {
       return
     }
+    let optimisticMessageId: string | null = null
     setSending(true)
     setErrorMessage(null)
     setRunRecoveryMessage(null)
@@ -1432,6 +1533,17 @@ export function ChatPanel({
     setRollbackResultsByOperationId({})
     try {
       const threadId = await ensureThread()
+      optimisticMessageId = `optimistic-${newClientRequestId()}`
+      const optimisticMessage: ConversationMessage = {
+        content,
+        created_at: new Date().toISOString(),
+        message_id: optimisticMessageId,
+        role: 'user',
+        run_id: null,
+        thread_id: threadId,
+        workspace_id: workspaceId,
+      }
+      setMessages((current) => mergeAndSortMessages([...current, optimisticMessage]))
       setPrompt('')
       const run = await createRun(
         threadId,
@@ -1442,15 +1554,47 @@ export function ChatPanel({
         },
         workspaceId,
       )
+      if (run.user_message_id) {
+        setMessages((current) =>
+          mergeAndSortMessages(
+            current.map((message) =>
+              message.message_id === optimisticMessageId
+                ? {
+                    ...message,
+                    created_at: run.created_at || message.created_at,
+                    message_id: run.user_message_id || message.message_id,
+                    run_id: run.run_id,
+                  }
+                : message,
+            ),
+          ),
+        )
+      }
       setRunningRunId(run.status === 'running' ? run.run_id : null)
       const events = await listRunEvents(run.run_id, {}, workspaceId)
       setRunEvents(events.events)
-      resumedRunIdRef.current = run.status === 'running' ? run.run_id : null
+      if (isClosedRunStatus(events.run_status)) {
+        setRunningRunId(null)
+        resumedRunIdRef.current = null
+        markThreadRunStatus(threadId, run.run_id, events.run_status)
+        if (events.run_status === 'failed') {
+          setErrorMessage(runFailureMessage(run, events.events))
+        }
+        await loadMessagesForThread(threadId)
+        await loadThreads()
+        return
+      }
+      resumedRunIdRef.current = run.run_id
       startRunEventReplay(run, events.next_after_event_id)
       await loadMessagesForThread(threadId)
       await loadThreads()
     } catch (error) {
       setRunningRunId(null)
+      if (optimisticMessageId) {
+        setMessages((current) =>
+          current.filter((message) => message.message_id !== optimisticMessageId),
+        )
+      }
       setErrorMessage(
         error instanceof Error ? error.message : 'Failed to send message.',
       )
@@ -1572,35 +1716,56 @@ export function ChatPanel({
             ? 'Approved from chat run event.'
             : 'Rejected from chat run event.',
       }
+      let response: RunApprovalDecisionResponse
       if (decision === 'approve') {
-        const response = await approveRunApproval(
+        response = await approveRunApproval(
           event.run_id,
           approvalId,
           input,
           workspaceId,
         )
-        setApprovalDecisionsById((current) => ({
-          ...current,
-          [approvalId]: response,
-        }))
       } else {
-        const response = await rejectRunApproval(
+        response = await rejectRunApproval(
           event.run_id,
           approvalId,
           input,
           workspaceId,
         )
-        setApprovalDecisionsById((current) => ({
-          ...current,
-          [approvalId]: response,
-        }))
       }
+      setApprovalDecisionsById((current) => ({
+        ...current,
+        [approvalId]: response,
+      }))
+      markThreadRunStatus(event.thread_id, event.run_id, response.run_status)
       const events = await listRunEvents(event.run_id, {}, workspaceId)
       setRunEvents(events.events)
-      await loadThreads()
-      if (decision === 'reject') {
-        await loadMessagesForThread(event.thread_id)
+      if (response.run_status === 'running') {
+        setRunningRunId(event.run_id)
+        resumedRunIdRef.current = event.run_id
+        startRunEventReplay(
+          {
+            assistant_message_id: null,
+            created_at: event.created_at,
+            idempotency_key: '',
+            last_event_id: events.next_after_event_id,
+            last_event_seq: events.events.at(-1)?.event_seq ?? 0,
+            leaf_state: {},
+            model_error: null,
+            run_id: event.run_id,
+            status: 'running',
+            thread_id: event.thread_id,
+            updated_at: new Date().toISOString(),
+            user_message_id: null,
+            workspace_id: workspaceId,
+          },
+          events.next_after_event_id,
+        )
+      } else {
+        setRunningRunId(null)
+        resumedRunIdRef.current = null
       }
+      await loadThreads()
+      await loadMessagesForThread(event.thread_id)
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : 'Failed to resolve approval.',
@@ -1746,11 +1911,11 @@ export function ChatPanel({
               {runRecoveryMessage && (
                 <Alert message={runRecoveryMessage} showIcon type="info" />
               )}
-              {loadingMessages ? (
+              {loadingMessages && displayedMessages.length === 0 ? (
                 <Skeleton active paragraph={{ rows: 8 }} />
               ) : (
                 <List
-                  dataSource={messages}
+                  dataSource={displayedMessages}
                   locale={{
                     emptyText: (
                       <Empty
@@ -1775,6 +1940,30 @@ export function ChatPanel({
           </div>
 
           <div className={styles.composer}>
+            {pendingApprovalEvents.length > 0 && (
+              <Space
+                className={styles.approvalPrompt}
+                direction="vertical"
+                size={8}
+                style={{ width: '100%' }}
+              >
+                {pendingApprovalEvents.map((event) => (
+                  <RunApprovalCard
+                    decision={
+                      approvalDecisionsById[approvalIdFromEvent(event) || '']
+                    }
+                    event={event}
+                    key={event.event_id}
+                    onRollback={handleRollbackOperation}
+                    onResolve={handleResolveApproval}
+                    resolvingApprovalId={resolvingApprovalId}
+                    rollbackResultsByOperationId={rollbackResultsByOperationId}
+                    rollingBackOperationId={rollingBackOperationId}
+                    runEvents={runEvents}
+                  />
+                ))}
+              </Space>
+            )}
             <Space.Compact block>
               <TextArea
                 autoSize={{ minRows: 2, maxRows: 6 }}

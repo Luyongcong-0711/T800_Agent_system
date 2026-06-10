@@ -26,8 +26,10 @@ from app.schemas.model import (
     ModelError,
     ModelRequest,
     ModelResult,
+    ModelStreamEvent,
     ModelToolCall,
     ModelUsage,
+    ToolCallDelta,
 )
 from app.schemas.skill import (
     SkillActivateRequest,
@@ -340,6 +342,259 @@ def test_default_registry_exposes_langchain_local_file_tools(tmp_path, monkeypat
     assert by_name["write_file"]["requires_approval"] is True
     assert by_name["file_delete"]["risk_level"] == "high"
     _assert_no_secret_material(specs)
+
+
+def test_local_file_read_inside_workspace_does_not_require_approval(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workspace_root = tmp_path / "local_workspace"
+    workspace_root.mkdir()
+    (workspace_root / "inside.txt").write_text("inside", encoding="utf-8")
+    monkeypatch.setenv("LOCAL_FILE_TOOLS_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_FILE_TOOLS_ROOT", str(workspace_root))
+    registry = build_default_tool_registry(LocalObjectStore(tmp_path / "objects"))
+
+    result = registry.invoke(
+        "list_directory",
+        {"dir_path": "."},
+        runtime_context={
+            "workspace_id": "default",
+            "thread_id": "thread_local",
+            "run_id": "run_local",
+            "user_id": "user_local",
+            "role": "owner",
+            "tool_call_id": "call_local",
+        },
+    )
+
+    assert "inside.txt" in result
+
+
+def test_local_file_read_outside_workspace_requires_approval_then_executes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workspace_root = tmp_path / "local_workspace"
+    workspace_root.mkdir()
+    outside_root = tmp_path / "outside"
+    outside_root.mkdir()
+    (outside_root / "outside.txt").write_text("outside", encoding="utf-8")
+    monkeypatch.setenv("LOCAL_FILE_TOOLS_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_FILE_TOOLS_ROOT", str(workspace_root))
+    object_store = LocalObjectStore(tmp_path / "objects")
+    registry = build_default_tool_registry(object_store)
+    runtime_context = {
+        "workspace_id": "default",
+        "thread_id": "thread_outside",
+        "run_id": "run_outside",
+        "user_id": "user_outside",
+        "role": "owner",
+        "tool_call_id": "call_outside",
+    }
+
+    approval = registry.invoke(
+        "list_directory",
+        {"dir_path": str(outside_root)},
+        runtime_context=runtime_context,
+    )
+
+    assert approval["error_type"] == "approval_required"
+    assert approval["data"]["risk_level"] == "high"
+    assert approval["data"]["approval_reason"] == "outside_local_file_root_read"
+    assert approval["data"]["target_path"] == str(outside_root.resolve())
+    plan = JsonObjectStore(object_store).read_json(approval["data"]["operation_plan_object_key"])
+    assert plan["target_path"] == str(outside_root.resolve())
+
+    listed = registry.invoke(
+        "list_directory",
+        {"dir_path": str(outside_root)},
+        runtime_context=runtime_context,
+        skip_approval=True,
+    )
+
+    assert "outside.txt" in listed
+
+
+def test_local_file_absolute_path_maps_to_host_root_after_approval(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workspace_root = tmp_path / "local_workspace"
+    workspace_root.mkdir()
+    host_root = tmp_path / "host"
+    host_opt = host_root / "opt"
+    host_opt.mkdir(parents=True)
+    (host_opt / "agent-system").mkdir()
+    monkeypatch.setenv("LOCAL_FILE_TOOLS_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_FILE_TOOLS_ROOT", str(workspace_root))
+    monkeypatch.setenv("LOCAL_FILE_HOST_ROOT", str(host_root))
+    object_store = LocalObjectStore(tmp_path / "objects")
+    registry = build_default_tool_registry(object_store)
+    runtime_context = {
+        "workspace_id": "default",
+        "thread_id": "thread_host_file",
+        "run_id": "run_host_file",
+        "user_id": "user_host_file",
+        "role": "owner",
+        "tool_call_id": "call_host_file",
+    }
+
+    approval = registry.invoke(
+        "list_directory",
+        {"dir_path": "/opt"},
+        runtime_context=runtime_context,
+    )
+    listed = registry.invoke(
+        "list_directory",
+        {"dir_path": "/opt"},
+        runtime_context=runtime_context,
+        skip_approval=True,
+    )
+
+    assert approval["error_type"] == "approval_required"
+    assert approval["data"]["target_path"].endswith("/opt") or approval["data"][
+        "target_path"
+    ].endswith("\\opt")
+    assert "Directory: /opt" in listed
+    assert "agent-system/" in listed
+
+
+def test_runtime_runner_streaming_local_file_tool_string_result_serializes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workspace_root = tmp_path / "local_workspace"
+    workspace_root.mkdir()
+    (workspace_root / "inside.txt").write_text("inside", encoding="utf-8")
+    monkeypatch.setenv("LOCAL_FILE_TOOLS_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_FILE_TOOLS_ROOT", str(workspace_root))
+
+    class StreamingLocalFileConnector:
+        def __init__(self) -> None:
+            self.requests: list[ModelRequest] = []
+
+        def call(
+            self,
+            workspace_id: str,
+            config: ModelConfig,
+            request: ModelRequest,
+        ) -> ModelResult:
+            _ = workspace_id, config, request
+            raise AssertionError("streaming local file test must use stream")
+
+        def stream(
+            self,
+            workspace_id: str,
+            config: ModelConfig,
+            request: ModelRequest,
+        ):
+            _ = workspace_id, config
+            self.requests.append(request)
+            yield ModelStreamEvent(type="message_start", request_id=request.request_id)
+            if len(self.requests) == 1:
+                yield ModelStreamEvent(
+                    type="tool_call_delta",
+                    request_id=request.request_id,
+                    tool_call_delta=ToolCallDelta(
+                        index=0,
+                        tool_call_id="call_list_inside",
+                        name="list_directory",
+                        args={"dir_path": "."},
+                    ),
+                )
+            else:
+                yield ModelStreamEvent(
+                    type="content_delta",
+                    request_id=request.request_id,
+                    delta="Listed workspace files.",
+                )
+            yield ModelStreamEvent(
+                type="usage_delta",
+                request_id=request.request_id,
+                usage=ModelUsage(input_tokens=2, output_tokens=2, total_tokens=4),
+            )
+            yield ModelStreamEvent(type="message_completed", request_id=request.request_id)
+            yield ModelStreamEvent(type="stream_closed", request_id=request.request_id)
+
+    connector = StreamingLocalFileConnector()
+    response = RuntimeRunner(
+        llm_connector=connector,  # type: ignore[arg-type]
+        model_config=ModelConfig(provider="fake", model="stream-local-file-test"),
+        object_store=LocalObjectStore(tmp_path / "objects"),
+    ).invoke_for_run(
+        workspace_id="default",
+        identity=RuntimeIdentity(),
+        run_id="run_stream_local_file",
+        thread_id="thread_stream_local_file",
+        user_message="List local files.",
+        model_stream_callback=lambda event: None,
+    )
+
+    assert response.status == "completed"
+    assert len(connector.requests) == 2
+    assert response.tool_results[0].ok is True
+    assert isinstance(response.tool_results[0].content, str)
+    assert "inside.txt" in response.tool_results[0].content
+
+
+def test_runtime_runner_streaming_local_file_outside_workspace_waits_for_approval(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workspace_root = tmp_path / "local_workspace"
+    workspace_root.mkdir()
+    outside_root = tmp_path / "outside"
+    outside_root.mkdir()
+    monkeypatch.setenv("LOCAL_FILE_TOOLS_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_FILE_TOOLS_ROOT", str(workspace_root))
+
+    class StreamingOutsideFileConnector:
+        def stream(
+            self,
+            workspace_id: str,
+            config: ModelConfig,
+            request: ModelRequest,
+        ):
+            _ = workspace_id, config
+            yield ModelStreamEvent(type="message_start", request_id=request.request_id)
+            yield ModelStreamEvent(
+                type="tool_call_delta",
+                request_id=request.request_id,
+                tool_call_delta=ToolCallDelta(
+                    index=0,
+                    tool_call_id="call_list_outside",
+                    name="list_directory",
+                    args={"dir_path": str(outside_root)},
+                ),
+            )
+            yield ModelStreamEvent(
+                type="usage_delta",
+                request_id=request.request_id,
+                usage=ModelUsage(input_tokens=2, output_tokens=2, total_tokens=4),
+            )
+            yield ModelStreamEvent(type="message_completed", request_id=request.request_id)
+            yield ModelStreamEvent(type="stream_closed", request_id=request.request_id)
+
+    response = RuntimeRunner(
+        llm_connector=StreamingOutsideFileConnector(),  # type: ignore[arg-type]
+        model_config=ModelConfig(provider="fake", model="stream-local-file-approval-test"),
+        object_store=LocalObjectStore(tmp_path / "objects"),
+    ).invoke_for_run(
+        workspace_id="default",
+        identity=RuntimeIdentity(),
+        run_id="run_stream_outside_file",
+        thread_id="thread_stream_outside_file",
+        user_message="List outside files.",
+        model_stream_callback=lambda event: None,
+    )
+
+    approval = response.tool_results[0].content
+    assert response.status == "waiting_approval"
+    assert response.requires_approval is True
+    assert approval["error_type"] == "approval_required"
+    assert approval["data"]["approval_reason"] == "outside_local_file_root_read"
+    assert approval["data"]["target_path"] == str(outside_root.resolve())
 
 
 def test_runtime_request_includes_compact_model_visible_tool_inventory() -> None:

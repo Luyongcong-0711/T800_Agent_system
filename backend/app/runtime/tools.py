@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -341,7 +342,7 @@ class ToolRegistry:
         args: dict[str, Any],
         runtime_context: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
-        metadata = _tool_metadata(tool)
+        metadata = _approval_metadata_for_args(tool, args, _tool_metadata(tool))
         risk_level = str(metadata.get("risk_level") or "low")
         requires_approval = bool(metadata.get("requires_approval") or False)
         if not requires_approval and risk_level not in {"high", "critical"}:
@@ -357,18 +358,22 @@ class ToolRegistry:
                 metadata=metadata,
                 runtime_context=runtime_context,
             )
+        data = {
+            "approval_id": approval_id,
+            "approval_kind": "tool_invocation",
+            "tool_name": tool.name,
+            "risk_level": risk_level,
+            "status": "waiting_approval",
+            "operation_plan_object_key": operation_plan_key,
+        }
+        for key in ("approval_reason", "target_path", "local_file_root"):
+            if metadata.get(key):
+                data[key] = metadata[key]
         return {
             "ok": False,
             "error_type": "approval_required",
             "message_for_model": "User approval is required before this tool can run.",
-            "data": {
-                "approval_id": approval_id,
-                "approval_kind": "tool_invocation",
-                "tool_name": tool.name,
-                "risk_level": risk_level,
-                "status": "waiting_approval",
-                "operation_plan_object_key": operation_plan_key,
-            },
+            "data": data,
         }
 
 
@@ -477,6 +482,58 @@ def _tool_metadata(tool: BaseTool) -> dict[str, Any]:
     return metadata if isinstance(metadata, dict) else {}
 
 
+def _approval_metadata_for_args(
+    tool: BaseTool,
+    args: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    if metadata.get("approval_policy") != "outside_local_file_root_read_requires_approval":
+        return metadata
+    root_value = metadata.get("local_file_root")
+    if not isinstance(root_value, str) or not root_value:
+        return metadata
+    target_raw = _local_file_target_arg(tool.name, args)
+    if target_raw is None:
+        return metadata
+
+    root_dir = Path(root_value).expanduser().resolve()
+    target_path = _resolve_local_file_target(str(target_raw), root_dir)
+    if _path_is_inside(target_path, root_dir):
+        return metadata
+    return {
+        **metadata,
+        "requires_approval": True,
+        "risk_level": "high",
+        "approval_reason": "outside_local_file_root_read",
+        "target_path": str(target_path),
+        "local_file_root": str(root_dir),
+    }
+
+
+def _local_file_target_arg(tool_name: str, args: dict[str, Any]) -> str | None:
+    if tool_name == "read_file":
+        value = args.get("file_path")
+    elif tool_name in {"list_directory", "file_search"}:
+        value = args.get("dir_path") or "."
+    else:
+        value = None
+    return str(value) if value is not None else None
+
+
+def _resolve_local_file_target(raw_path: str, root_dir: Path) -> Path:
+    candidate = Path(raw_path or ".").expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (root_dir / candidate).resolve()
+
+
+def _path_is_inside(path: Path, root_dir: Path) -> bool:
+    try:
+        return path == root_dir or path.is_relative_to(root_dir)
+    except ValueError:
+        return False
+
+
 def _write_tool_approval_plan(
     object_store: Any,
     *,
@@ -511,6 +568,11 @@ def _write_tool_approval_plan(
         "runtime_context": redact_runtime_value(runtime_context),
         "args": redact_runtime_value(args),
         "artifacts": {},
+        **{
+            key: metadata[key]
+            for key in ("approval_reason", "target_path", "local_file_root")
+            if metadata.get(key)
+        },
         "created_at": now,
         "updated_at": now,
         "revision": 1,

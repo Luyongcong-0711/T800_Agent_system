@@ -102,6 +102,8 @@ def _build_health_report(
         status = str(service_item.get("status") or "unknown")
         report_item = _target_report(target_name, config_item, service_item)
         target_reports.append(report_item)
+        if status == "disabled" or report_item["enabled"] is False:
+            continue
         if status != "healthy":
             if status == "unknown":
                 unknown_targets.append(target_name)
@@ -192,7 +194,7 @@ def _target_recommendations(
     elif target_name == "neo4j":
         recommendations.extend(
             [
-                "确认 Neo4j HTTP 或 bolt 入口可达。",
+                "确认 Neo4j HTTP 或 Bolt 入口可达。",
                 "确认数据库账号配置已准备好，并可用于图谱读写。",
             ]
         )

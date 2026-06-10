@@ -108,7 +108,8 @@ volumes:
 开发时可以先只启动依赖服务，后端和前端在宿主机运行：
 
 ```text
-docker compose -f deploy/compose/docker-compose.local.yml up -d minio milvus neo4j redis
+docker compose -f deploy/compose/docker-compose.local.yml up -d redis
+docker compose -f deploy/compose/docker-compose.local.yml --profile external-db up -d minio milvus neo4j
 ```
 
 ## .env.example
@@ -242,7 +243,8 @@ Redis url + credential_ref
 ## 初始化流程
 
 ```text
-docker compose up -d minio milvus neo4j redis
+docker compose up -d redis
+docker compose --profile external-db up -d minio milvus neo4j
   -> create MinIO bucket
   -> apply Neo4j constraints
   -> backend /bootstrap 创建 default workspace manifest

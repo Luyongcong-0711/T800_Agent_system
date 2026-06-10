@@ -69,6 +69,11 @@ class MilvusHttpVectorStore:
                 "metricType": "COSINE",
                 "primaryFieldName": "chunk_id",
                 "vectorFieldName": "vector",
+                "autoId": False,
+                "params": {
+                    "enableDynamicField": True,
+                    "max_length": "512",
+                },
             },
         )
 
@@ -297,7 +302,13 @@ def _classify_milvus_error(
         "milvus_code": payload.get("code"),
         "message": raw_message,
     }
-    if "not found" in lowered or "not exist" in lowered or "does not exist" in lowered:
+    if (
+        "not found" in lowered
+        or "not exist" in lowered
+        or "does not exist" in lowered
+        or "can't find collection" in lowered
+        or "cannot find collection" in lowered
+    ):
         return MilvusVectorStoreError(
             "collection_not_found",
             "Milvus collection does not exist.",

@@ -85,11 +85,20 @@ class ConversationContextLoader:
         content = str(record.get("content") or "")
         message_id = str(record.get("message_id") or "")
         if role == "assistant":
-            tool_calls = record.get("tool_calls")
+            raw_tool_calls = record.get("tool_calls")
+            tool_calls = (
+                [
+                    {**call, "type": call.get("type") or "tool_call"}
+                    for call in raw_tool_calls
+                    if isinstance(call, dict)
+                ]
+                if isinstance(raw_tool_calls, list)
+                else []
+            )
             return AIMessage(
                 content=content,
                 id=message_id,
-                tool_calls=tool_calls if isinstance(tool_calls, list) else [],
+                tool_calls=tool_calls,
             )
         if role == "system":
             return SystemMessage(content=content, id=message_id)

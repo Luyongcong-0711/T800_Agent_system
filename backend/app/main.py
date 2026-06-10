@@ -291,7 +291,7 @@ app = create_app()
 
 
 def _seed_development_default_model_secret(settings) -> None:
-    if not settings.is_development_like:
+    if not settings.is_development_like and not settings.static_secret_seed_enabled:
         return
     if not settings.default_model_api_key or not settings.default_model_api_key_ref:
         return
@@ -310,7 +310,7 @@ def _seed_development_default_model_secret(settings) -> None:
 
 
 def _seed_development_default_embedding_secret(settings) -> None:
-    if not settings.is_development_like:
+    if not settings.is_development_like and not settings.static_secret_seed_enabled:
         return
     if not settings.default_embedding_api_key or not settings.default_embedding_api_key_ref:
         return

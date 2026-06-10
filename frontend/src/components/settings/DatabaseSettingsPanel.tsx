@@ -838,6 +838,9 @@ function healthColor(status: string) {
   if (status === 'healthy') {
     return 'green'
   }
+  if (status === 'disabled') {
+    return 'default'
+  }
   if (status === 'unhealthy') {
     return 'red'
   }

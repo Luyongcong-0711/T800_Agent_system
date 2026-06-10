@@ -31,7 +31,7 @@ class RuntimeToolResult(TypedDict):
     tool_call_id: str
     name: str
     ok: bool
-    content: dict[str, Any]
+    content: Any
     error_type: str | None
 
 

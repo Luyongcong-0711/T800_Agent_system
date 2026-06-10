@@ -13,8 +13,12 @@ from app.mcp.service import McpCapabilityProvider, McpService
 from app.mcp_client.invocation import McpInvocationError
 from app.observability.service import ObservabilityService
 from app.rag_pipeline.ingestion import DocumentIngestionService
-from app.storage.object_store import ObjectStore
-from app.storage.path_builder import database_health_snapshot_key, subagent_task_result_key
+from app.storage.object_store import JsonObjectStore, ObjectStore
+from app.storage.path_builder import (
+    database_health_snapshot_key,
+    memory_sync_state_key,
+    subagent_task_result_key,
+)
 
 
 def build_document_ingestion_handler(
@@ -340,6 +344,28 @@ def build_memory_sync_handler(
         from app.memory.sync_service import MemorySyncService
 
         job_input = context.input
+        if not current_settings.memory_external_sync_enabled:
+            sync_state = JsonObjectStore(object_store).read_json_or_default(
+                memory_sync_state_key(context.workspace_id),
+                {"pending_targets": []},
+            )
+            return JobHandlerResult.succeeded(
+                stage="memory_sync_disabled",
+                message=(
+                    "External memory index sync is disabled; pending targets are retained "
+                    "in the local outbox."
+                ),
+                artifacts=[
+                    {
+                        "artifact_type": "memory_sync_result",
+                        "processed_count": 0,
+                        "succeeded_count": 0,
+                        "failed_count": 0,
+                        "pending_count": len(sync_state.get("pending_targets") or []),
+                        "disabled": True,
+                    }
+                ],
+            )
         embedding_config = _embedding_public_config(
             object_store,
             context.workspace_id,

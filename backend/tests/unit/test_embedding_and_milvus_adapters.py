@@ -88,6 +88,10 @@ def test_milvus_http_vector_store_creates_collection_and_upserts_records() -> No
     ]
     assert requests[1][1]["collectionName"] == "kb_default_v1"
     assert requests[1][1]["dimension"] == 3
+    assert requests[1][1]["params"] == {
+        "enableDynamicField": True,
+        "max_length": "512",
+    }
     assert requests[2][1]["data"][0]["chunk_id"] == "chk_001"
     assert requests[2][1]["data"][0]["vector"] == [0.1, 0.2, 0.3]
 
@@ -226,6 +230,35 @@ def test_milvus_http_vector_store_marks_missing_collection_non_retryable() -> No
 
     assert exc_info.value.error_type == "collection_not_found"
     assert exc_info.value.retryable is False
+
+
+def test_milvus_http_vector_store_treats_cant_find_collection_as_missing() -> None:
+    requests: list[tuple[str, dict[str, object]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content or b"{}")
+        requests.append((request.url.path, payload))
+        if request.url.path.endswith("/collections/describe"):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 100,
+                    "message": "can't find collection[database=default][collection=kb_default_v1]",
+                },
+            )
+        return httpx.Response(200, json={"code": 0})
+
+    store = MilvusHttpVectorStore(
+        uri="http://milvus.local",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    store.ensure_collection(collection="kb_default_v1", dimension=3)
+
+    assert [path for path, _ in requests] == [
+        "/v2/vectordb/collections/describe",
+        "/v2/vectordb/collections/create",
+    ]
 
 
 def test_milvus_http_vector_store_marks_dimension_mismatch_non_retryable() -> None:

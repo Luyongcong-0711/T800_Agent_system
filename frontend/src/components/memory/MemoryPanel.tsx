@@ -149,6 +149,9 @@ export function MemoryPanel({ workspaceId }: MemoryPanelProps) {
     (job) => !TERMINAL_JOB_STATUSES.has(job.status),
   )
   const latestMemorySyncJob = memorySyncJobs[0]
+  const memorySyncPaused =
+    memorySyncState?.external_sync_enabled === false ||
+    memorySyncState?.last_enqueue?.status === 'disabled'
 
   const loadMemories = useCallback(async () => {
     setLoading(true)
@@ -305,8 +308,17 @@ export function MemoryPanel({ workspaceId }: MemoryPanelProps) {
 
       <div aria-live="polite" className={styles.syncBar}>
         <Space wrap>
-          <Tag color={memorySyncStatusColor(latestMemorySyncJob?.status)}>
-            Memory sync {memorySyncStatusLabel(activeMemorySyncJobs, latestMemorySyncJob)}
+          <Tag
+            color={
+              memorySyncPaused
+                ? 'default'
+                : memorySyncStatusColor(latestMemorySyncJob?.status)
+            }
+          >
+            Memory sync{' '}
+            {memorySyncPaused
+              ? 'paused/local-only'
+              : memorySyncStatusLabel(activeMemorySyncJobs, latestMemorySyncJob)}
           </Tag>
           {activeMemorySyncJobs.length > 0 && (
             <Text type="secondary">{activeMemorySyncJobs.length} queued/running</Text>
@@ -316,6 +328,7 @@ export function MemoryPanel({ workspaceId }: MemoryPanelProps) {
               {memorySyncState.pending_targets.length} pending targets
             </Text>
           )}
+          {memorySyncPaused && <Text type="secondary">external indexes disabled</Text>}
           {latestMemorySyncJob && (
             <Text type="secondary">
               latest {latestMemorySyncJob.status} at {formatDate(latestMemorySyncJob.updated_at)}
@@ -323,7 +336,7 @@ export function MemoryPanel({ workspaceId }: MemoryPanelProps) {
           )}
         </Space>
         <Button
-          disabled={activeMemorySyncJobs.length > 0}
+          disabled={memorySyncPaused || activeMemorySyncJobs.length > 0}
           loading={memorySyncLoading}
           onClick={() => void handleQueueMemorySync()}
           size="small"

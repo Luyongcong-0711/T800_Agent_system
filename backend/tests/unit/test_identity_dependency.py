@@ -15,8 +15,23 @@ def test_default_identity_is_allowed_in_development(monkeypatch: pytest.MonkeyPa
     assert identity.workspace_id == "default"
 
 
-def test_default_identity_is_rejected_outside_development(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_identity_is_allowed_in_production_when_login_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("LOGIN_ENABLED", "false")
+
+    identity = get_identity()
+
+    assert identity.user_id == "default_user"
+    assert identity.workspace_id == "default"
+
+
+def test_default_identity_is_rejected_outside_development_when_login_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("LOGIN_ENABLED", "true")
 
     with pytest.raises(HTTPException) as exc_info:
         get_identity()

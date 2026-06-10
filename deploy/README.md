@@ -4,32 +4,35 @@ This deploy folder contains the local P0 runtime stack from the final plan:
 
 - Agent System backend
 - Agent System frontend
-- MinIO
-- Milvus
-- Neo4j
+- Optional MinIO, Milvus, Neo4j, and etcd through the `external-db` profile
 - Redis as cache only
 
 It intentionally does not define PostgreSQL, MySQL, Gateway, WebSocket, or Redis queue services.
 The local stack enables `JOB_WORKER_AUTOSTART=true` so Job-based document ingestion, MCP refresh,
 database health checks, diagnostics, and log archive work can run without a manual worker start.
+The current default is local-only runtime state: `OBJECT_STORE_BACKEND=local`,
+`EXTERNAL_DATABASE_TARGETS_ENABLED=false`, and `MEMORY_EXTERNAL_SYNC_ENABLED=false`.
+This keeps conversation history and memories in `.agent_state` while the database structure is
+being redesigned. External database containers and volumes are kept available, but they are not
+started unless the `external-db` profile is selected.
 
 ## Small VPS deployment note
 
-A 2 core / 8 GB VPS can run this stack as a light development or smoke-test environment, but it should not be treated as a production high-concurrency target. Milvus, Neo4j, MinIO, backend, frontend, Redis, and etcd can fit if the machine is quiet, swap is enabled, and only small knowledge bases are used.
+A 2 core / 8 GB VPS can run the default backend/frontend/Redis stack comfortably as a light development or smoke-test environment. Milvus, Neo4j, MinIO, and etcd can still be enabled later through the `external-db` profile, but they should not be treated as always-on production services on a small VPS.
 
 Recommended operating posture for a 2C8G VPS:
 
 - Keep it as a remote dev / demo / final-acceptance target.
-- Use Docker Compose with persistent volumes for MinIO, Milvus, etcd, Neo4j, and Redis.
+- Use Docker Compose with persistent volumes. Keep `.agent_state` backed up while local object storage is the active state store.
 - Keep `JOB_WORKER_MAX_JOBS_PER_TICK` low, such as `1` or `2`, when running ingestion or embedding rebuilds.
 - Avoid large parallel document ingestion, large graph builds, or multiple embedding rebuild jobs.
 - Prefer remote provider APIs for LLM and embedding; do not run local large models on the same VPS.
 - Expose only frontend/backend through a reverse proxy; keep MinIO, Milvus, Neo4j, Redis, and etcd private.
-- Back up MinIO and Neo4j volumes before changing embedding model, graph schema, or compose versions.
+- Before re-enabling external databases, back up existing MinIO, Milvus, etcd, Neo4j volumes and `.agent_state`.
 
 The project architecture does not change when moving from local Docker Desktop to a VPS. The main differences are environment values, public hostnames/TLS, firewall rules, persistent volume locations, and lower concurrency defaults.
 
-## Start full stack
+## Start default stack
 
 From `agent-system`:
 
@@ -43,18 +46,35 @@ Equivalent root compose entry:
 docker compose --env-file deploy/env/local.env.example up -d --build
 ```
 
-## Start dependencies only
+This starts backend, frontend, and Redis. Runtime state is written to `.agent_state`; MinIO, Milvus,
+Neo4j, and etcd are not started by default.
 
-Use this when running backend/frontend manually from source:
+## Start optional external databases
+
+Use this only when working on database integration or the final MinIO/Milvus/Neo4j structure:
 
 ```powershell
-docker compose --env-file deploy/env/local.env.example -f deploy/compose/docker-compose.local.yml up -d minio milvus neo4j redis
+docker compose --env-file deploy/env/local.env.example -f deploy/compose/docker-compose.local.yml --profile external-db up -d --build
 ```
 
 Equivalent root compose entry:
 
 ```powershell
-docker compose --env-file deploy/env/local.env.example up -d minio milvus neo4j redis
+docker compose --env-file deploy/env/local.env.example --profile external-db up -d --build
+```
+
+## Start dependencies only
+
+Use this when running backend/frontend manually from source:
+
+```powershell
+docker compose --env-file deploy/env/local.env.example -f deploy/compose/docker-compose.local.yml up -d redis
+```
+
+Equivalent root compose entry:
+
+```powershell
+docker compose --env-file deploy/env/local.env.example up -d redis
 ```
 
 When running the backend from source, load the same env values before starting Uvicorn so manual mode matches the P0 compose topology:

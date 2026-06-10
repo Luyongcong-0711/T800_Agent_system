@@ -105,19 +105,69 @@ def _check_tcp(target: str, url: str, timeout_s: float = 2.0) -> ServiceHealth:
         )
 
 
+def _target_enabled(settings: Settings, target: str) -> bool:
+    enabled_targets = getattr(settings, "enabled_targets", None)
+    if isinstance(enabled_targets, dict) and target in enabled_targets:
+        return bool(enabled_targets[target])
+    return True
+
+
+def _disabled_service(target: str) -> ServiceHealth:
+    return ServiceHealth(
+        target=target,
+        status="disabled",
+        latency_ms=None,
+        message="service_disabled",
+        checked_at=utc_now_iso(),
+        details={"reason": "database_target_disabled"},
+    )
+
+
 async def check_database_services(settings: Settings) -> list[ServiceHealth]:
-    minio = await _check_http("minio", f"{settings.minio_endpoint.rstrip('/')}/minio/health/live")
+    minio = (
+        await _check_http("minio", f"{settings.minio_endpoint.rstrip('/')}/minio/health/live")
+        if _target_enabled(settings, "minio")
+        else _disabled_service("minio")
+    )
     milvus_health_url = settings.milvus_uri.replace(":19530", ":9091").rstrip("/") + "/healthz"
-    milvus = await _check_http("milvus", milvus_health_url)
-    neo4j = await _check_http("neo4j", settings.neo4j_http_url)
-    redis = _check_tcp("redis", settings.redis_url)
+    milvus = (
+        await _check_http("milvus", milvus_health_url)
+        if _target_enabled(settings, "milvus")
+        else _disabled_service("milvus")
+    )
+    neo4j = (
+        await _check_http("neo4j", settings.neo4j_http_url)
+        if _target_enabled(settings, "neo4j")
+        else _disabled_service("neo4j")
+    )
+    redis = (
+        _check_tcp("redis", settings.redis_url)
+        if _target_enabled(settings, "redis")
+        else _disabled_service("redis")
+    )
     return [minio, milvus, neo4j, redis]
 
 
 def check_database_services_sync(settings: Settings) -> list[ServiceHealth]:
-    minio = _check_http_sync("minio", f"{settings.minio_endpoint.rstrip('/')}/minio/health/live")
+    minio = (
+        _check_http_sync("minio", f"{settings.minio_endpoint.rstrip('/')}/minio/health/live")
+        if _target_enabled(settings, "minio")
+        else _disabled_service("minio")
+    )
     milvus_health_url = settings.milvus_uri.replace(":19530", ":9091").rstrip("/") + "/healthz"
-    milvus = _check_http_sync("milvus", milvus_health_url)
-    neo4j = _check_http_sync("neo4j", settings.neo4j_http_url)
-    redis = _check_tcp("redis", settings.redis_url)
+    milvus = (
+        _check_http_sync("milvus", milvus_health_url)
+        if _target_enabled(settings, "milvus")
+        else _disabled_service("milvus")
+    )
+    neo4j = (
+        _check_http_sync("neo4j", settings.neo4j_http_url)
+        if _target_enabled(settings, "neo4j")
+        else _disabled_service("neo4j")
+    )
+    redis = (
+        _check_tcp("redis", settings.redis_url)
+        if _target_enabled(settings, "redis")
+        else _disabled_service("redis")
+    )
     return [minio, milvus, neo4j, redis]

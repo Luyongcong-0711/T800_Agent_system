@@ -117,11 +117,12 @@ class DatabaseConfigService:
         }
 
     def _default_targets(self) -> list[dict[str, Any]]:
+        external_enabled = self.settings.external_database_targets_enabled
         return [
             {
                 "target": "minio",
                 "mode": "local",
-                "enabled": True,
+                "enabled": external_enabled,
                 "endpoint": self.settings.minio_endpoint,
                 "tls": self.settings.minio_secure,
                 "bucket": self.settings.minio_bucket,
@@ -131,7 +132,7 @@ class DatabaseConfigService:
             {
                 "target": "milvus",
                 "mode": "local",
-                "enabled": True,
+                "enabled": external_enabled,
                 "endpoint": self.settings.milvus_uri,
                 "tls": self.settings.milvus_uri.startswith("https://"),
                 "bucket": None,
@@ -141,7 +142,7 @@ class DatabaseConfigService:
             {
                 "target": "neo4j",
                 "mode": "local",
-                "enabled": True,
+                "enabled": external_enabled,
                 "endpoint": self.settings.neo4j_uri,
                 "tls": self.settings.neo4j_uri.startswith("neo4j+s://"),
                 "bucket": None,
@@ -214,6 +215,10 @@ class DatabaseConfigService:
             neo4j_username_password=resolved_credentials.get("neo4j_username_password"),
             redis_url=targets["redis"]["endpoint"],
             redis_password=resolved_credentials.get("redis_password"),
+            enabled_targets={
+                target_name: bool(target.get("enabled", True))
+                for target_name, target in targets.items()
+            },
         )
 
     def _write_health_snapshot(
@@ -225,7 +230,7 @@ class DatabaseConfigService:
     ) -> dict[str, Any]:
         snapshot = {
             "schema_version": 1,
-            "ok": all(service.status == "healthy" for service in services),
+            "ok": all(service.status in {"healthy", "disabled"} for service in services),
             "workspace_id": workspace_id,
             "services": [service.model_dump() for service in services],
             "checked_at": utc_now_iso(),
@@ -373,6 +378,8 @@ class DatabaseConfigService:
         failures: dict[str, ServiceHealth] = {}
         targets = {target["target"]: target for target in config["targets"]}
         for target_name in TARGET_ORDER:
+            if not bool(targets[target_name].get("enabled", True)):
+                continue
             try:
                 self._resolve_config_credentials(
                     workspace_id,

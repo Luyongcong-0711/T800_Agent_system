@@ -65,6 +65,11 @@ class MemorySyncService:
                         "error_type": result["error_type"],
                         "message": result["message"],
                         "retryable": retryable,
+                        **(
+                            {"details": result["details"]}
+                            if isinstance(result.get("details"), dict)
+                            else {}
+                        ),
                     },
                     "last_attempt_at": now,
                     "next_retry_at": _next_retry_at() if retryable else None,
@@ -129,6 +134,11 @@ class MemorySyncService:
                 "error_type": getattr(exc, "error_type", exc.__class__.__name__),
                 "message": str(exc) or exc.__class__.__name__,
                 "retryable": bool(getattr(exc, "retryable", True)),
+                **(
+                    {"details": getattr(exc, "details")}
+                    if isinstance(getattr(exc, "details", None), dict)
+                    else {}
+                ),
             }
         return {
             "ok": True,

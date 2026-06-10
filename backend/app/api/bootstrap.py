@@ -27,5 +27,8 @@ async def bootstrap(
             workspace_id=identity.workspace_id,
             workspace_role=identity.workspace_role,
         ),
-        feature_flags=FeatureFlags(),
+        feature_flags=FeatureFlags(
+            login_enabled=settings.login_enabled,
+            workspace_switch_enabled=settings.workspace_switch_enabled,
+        ),
     )

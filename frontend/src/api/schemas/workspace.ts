@@ -733,6 +733,8 @@ export interface MemorySyncStateResponse {
   schema_version: number
   workspace_id: string
   pending_targets: Record<string, unknown>[]
+  external_sync_enabled?: boolean | null
+  sync_mode?: string | null
   last_event_id?: string | null
   last_event_seq: number
   last_enqueue?: Record<string, unknown> | null
